@@ -30,10 +30,9 @@
   <component name="MacroExpansionManager">
     <option name="directoryName" value="fXWh5PkO" />
   </component>
-  <component name="ProjectColorInfo">{
-  &quot;customColor&quot;: &quot;&quot;,
-  &quot;associatedIndex&quot;: 4
-}</component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 0
+}]]></component>
   <component name="ProjectId" id="2tllexpFrXPCbTs3bzBmNkHVri8" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
@@ -91,7 +90,7 @@
       <updated>1740934642297</updated>
       <workItem from="1740934644152" duration="2170000" />
       <workItem from="1741002174828" duration="4468000" />
-      <workItem from="1741011237058" duration="518000" />
+      <workItem from="1741011237058" duration="8373000" />
     </task>
     <servers />
   </component>
