@@ -7,6 +7,8 @@ use esp_println::println;
 use xtensa_lx_rt::entry;
 
 mod rustilka;
+mod cfg;
+
 #[entry]
 fn main() -> ! {
     // println!("Hello, world!");
