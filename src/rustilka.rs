@@ -1,18 +1,17 @@
+use core::any::Any;
 use core::cell::RefCell;
 use core::fmt::Debug;
+use embassy_sync::blocking_mutex::NoopMutex;
 use esp_hal::delay::Delay;
-use esp_hal::gpio::{GpioPin, Input, Io, Level, Output};
+use esp_hal::gpio::{DriveMode, GpioPin, Input, Io, Level, Output, OutputConfig, Pin, Pull};
 use esp_hal::peripherals::{ADC1, Peripherals, SPI2};
 
-use mipidsi::interface::SpiInterface;
+use mipidsi::interface::{Interface, SpiInterface};
 use mipidsi::models::{GC9107, ST7789};
-use mipidsi::options::{ColorInversion, Orientation};
+use mipidsi::options::{ColorInversion, Orientation, TearingEffect};
 use mipidsi::{Builder, Display, NoResetPin};
 
 use crate::cfg::Configuration;
-use display_interface_spi::SPIInterface;
-use embassy_embedded_hal::shared_bus::blocking::spi::SpiDevice;
-use embassy_sync::blocking_mutex::{NoopMutex, raw::NoopRawMutex};
 
 use embedded_graphics::Drawable;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
@@ -20,21 +19,21 @@ use embedded_graphics::prelude::{DrawTarget, Point, Primitive, Size};
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle, Triangle};
 
 use embedded_hal::digital::OutputPin;
-use embedded_hal_bus::spi::ExclusiveDevice;
-use embedded_sdmmc::{Directory, SdCard, TimeSource, Timestamp, VolumeManager};
-use esp_hal::analog::adc::{Adc, AdcPin};
+use embedded_hal::spi::SpiDevice;
+use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay, RefCellDevice};
+
 use esp_hal::clock::{Clock, CpuClock};
-use esp_hal::debugger::debugger_connected;
-use esp_hal::peripheral::Peripheral;
+
 use esp_hal::rtc_cntl::Rtc;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::spi::{BitOrder, Mode};
+use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{Async, Blocking, DriverMode};
-use esp_println::{print, println};
+use esp_println::{dbg, print, println};
+use mipidsi::dcs::{InterfaceExt, SoftReset};
 use static_cell::StaticCell;
 
-static SPI_BUS: StaticCell<NoopMutex<RefCell<Spi<'static, SPI2>>>> = StaticCell::new();
 pub struct InputState {
     pub up: Input<'static>,     // GPIO38
     pub down: Input<'static>,   // GPIO41
@@ -48,40 +47,35 @@ pub struct InputState {
     pub start: Input<'static>,  // GPIO4
 }
 
-// pub type LilkaDisplay = Display<
-//     SPIInterface<
-//         SpiDevice<
-//             'static,
-//             NoopRawMutex,
-//             Spi<'static, dyn DriverMode>,
-//             Output<'static>, // PIN 7
-//             Output<'static>, // PIN 15
-//             ST7789,
-//             NoResetPin,
-//         >,
-//     >,
-// >;
+pub type LilkaDisplay = Display<
+    SpiInterface<
+        'static,
+        RefCellDevice<'static, Spi<'static, Blocking>, Output<'static>, NoDelay>,
+        Output<'static>,
+    >,
+    ST7789,
+    NoResetPin,
+>;
 // pub type LilkaDisplay = Display<
 //     SpiInterface<
-//         SpiDevice<
-//             'static,
-//             NoopRawMutex,
-//             Spi<'static, dyn DriverMode>,
-//             Output<'static>, // PIN 7
-//             Output<'static>, // PIN 15
-//             ST7789,
-//             NoResetPin,
-//         >,
+//         'static,
+//         ExclusiveDevice<Spi<'static, Blocking>, Output<'static>, NoDelay>,
+//         Output<'static>,
 //     >,
+//     ST7789,
+//     NoResetPin,
 // >;
+
 pub struct Buzzer(GpioPin<11>);
-pub struct Battery {
-    adc: Adc<'static, ADC1>,
-    adc_pin: AdcPin<GpioPin<3>, ADC1>,
-}
+// pub struct Battery {
+//     adc: Adc<'static, ADC1>,
+//     adc_pin: AdcPin<GpioPin<3>, ADC1>,
+// }
 pub struct Lilka {
     pub peripherals: Peripherals,
     pub delay: Delay,
+    pub display: LilkaDisplay,
+
     //Other fields
     // pub state: InputState,
     // pub display,
@@ -91,10 +85,13 @@ pub struct Lilka {
     pub buzzer: Buzzer,
     // pub i2s_tx: I2sTx<'static, I2S0, Channel0, Blocking>,
 }
+pub static EXECUTOR: StaticCell<esp_hal_embassy::Executor> = StaticCell::new();
+static DISPLAY_BUFFER_CELL: StaticCell<[u8; 512]> = StaticCell::new();
+static SPI_CELL: StaticCell<RefCell<Spi<'static, Blocking>>> = StaticCell::new();
 
 impl Lilka {
     pub fn new(lilka_config: Configuration) -> Result<Self, &'static str> {
-        println!("INIT!");
+        println!("===Lilka init===");
 
         //init log
         esp_println::logger::init_logger_from_env();
@@ -108,10 +105,15 @@ impl Lilka {
         });
 
         //Display initialization
-        Output::new(peripherals.GPIO45, Level::High).set_high();
+        Output::new(
+            peripherals.GPIO45,
+            Level::High,
+            OutputConfig::default().with_pull(Pull::Down),
+        )
+        .set_high();
 
         // Disable the RTC and TIMG watchdog timers
-        println!("Disabling watchdog timers");
+        println!("Disabling watchdog timers...");
         let mut rtc = Rtc::new(peripherals.LPWR);
         let timer_group0 = TimerGroup::new(peripherals.TIMG0);
         let mut wdt0 = timer_group0.wdt;
@@ -127,36 +129,68 @@ impl Lilka {
 
         //
         // Define the Data/Command select pin as a digital output
-        let disp_dc = Output::new(peripherals.GPIO15, Level::Low); //good
+        let disp_dc = Output::new(peripherals.GPIO15, Level::High, OutputConfig::default()); //good
 
-        let disp_cs = Output::new(peripherals.GPIO7, Level::Low); //good
+        let disp_cs = Output::new(peripherals.GPIO7, Level::High, OutputConfig::default()); //good
         let mosi = peripherals.GPIO17; //good
         let miso = peripherals.GPIO8; //good
         let sck = peripherals.GPIO18; //good
 
         let spi_config: Config = Config::default()
-            .with_frequency(lilka_config.spi_freq)
-            .with_mode(Mode::_0)
-            .with_write_bit_order(BitOrder::MsbFirst)
-            .with_read_bit_order(BitOrder::MsbFirst);
+            .with_frequency(Rate::from_mhz(60))
+            .with_mode(Mode::_0);
+        // .with_write_bit_order(BitOrder::MsbFirst)
+        // .with_read_bit_order(BitOrder::MsbFirst);
 
         let spi = Spi::new(peripherals.SPI2, spi_config)
             .unwrap()
             .with_sck(sck)
             .with_mosi(mosi)
             .with_miso(miso);
-        // .with_sio1(miso);
 
-        let spi_device = ExclusiveDevice::new_no_delay(spi, disp_cs).unwrap();
+        // let ref_spi = RefCell::new(spi);
+
+        println!("CS pin: {:?}", disp_cs);
+
+        // let spi_device = match ExclusiveDevice::new_no_delay(spi, disp_cs) {
+        //     Ok(spi_device) => {
+        //         println!("\x1b[42m[OK]\x1b[0m SPI device init");
+        //         spi_device
+        //     }
+        //     Err(e) => {
+        //         println!("[ERROR] Display init failed: {:?}", e);
+        //         return Err("Display init failed");
+        //     }
+        // };
+
+        let spi_static = SPI_CELL.init(RefCell::new(spi));
+        let spi_device = match RefCellDevice::new_no_delay(spi_static, disp_cs) {
+            Ok(spi_device) => {
+                println!("\x1b[42m[OK]\x1b[0m SPI device init");
+                spi_device
+            }
+            Err(e) => {
+                println!("[ERROR] Display init failed: {:?}", e);
+                return Err("Display init failed");
+            }
+        };
+        // println!("\x1b[42m[SPI_DEVICE]\x1b[0m: {:?}", spi_device.inner());
+        // log::info!("\x1b[42m[SPI_DEVICE]\x1b[0m: {:?}", spi_device);
+
+        // log::info!("CS pin: {:?}", disp_cs);
+
         // let spi_bus = SPI_BUS.init(NoopMutex::new(RefCell::new(spi)));
         // let spi_device = SpiDevice::new(spi_bus, disp_cs);
 
         // Define the display interface with no chip select
-        let mut buffer = [0_u8; 512];
-        let di = SpiInterface::new(spi_device, disp_dc, &mut buffer);
+
+        let display_buffer = DISPLAY_BUFFER_CELL.init([0_u8; 512]);
+
+        let di = SpiInterface::new(spi_device, disp_dc, display_buffer);
+        // println!("\x1b[42m[DISPLAY]\x1b[0m: {:?}", di.);
 
         // Define the display from the display interface and initialize it
-        println!("Display initialization");
+        println!("Display initialization...");
         let mut display = match Builder::new(ST7789, di)
             .display_size(240, 280)
             .orientation(Orientation::new().rotate(lilka_config.display_rotation))
@@ -167,7 +201,8 @@ impl Lilka {
             .init(&mut delay)
         {
             Ok(display) => {
-                println!("[OK] Display init");
+                // println!("[OK] Display init");
+                println!("\x1b[42m[OK]\x1b[0m Display init");
                 display
             }
             Err(e) => {
@@ -176,21 +211,20 @@ impl Lilka {
             }
         };
 
-        // let res = display
-        //     .fill_solid(
-        //         &Rectangle::new(Point::new(4, 4), Size::new(20, 20)),
-        //         Rgb565::WHITE,
-        //     )
-        //     .unwrap();
-        println!("IS SLEEPING: {:?}", display.is_sleeping());
-        display
-            .set_pixel(100, 200, Rgb565::new(251, 188, 20))
-            .unwrap();
-        // res.0.
+        display.set_tearing_effect(TearingEffect::Off).unwrap();
+
+        // println!("[display]: {:?}", display);
+
+        // Make the display all white
+        // display.set_tearing_effect(TearingEffect::Off).unwrap();
+        // let dcs = unsafe { display.dcs() };
+        // dcs.write_command(SoftReset).unwrap();
+        // delay.delay_ms(150);
+
+        display.clear(Rgb565::WHITE).unwrap();
+
         // println!("Display wake");
         // display.wake(&mut delay).unwrap();
-        // Make the display all black
-        // display.clear(Rgb565::GREEN).unwrap();
 
         // Draw a smiley face with white eyes and a red mouth
         // println!("Draw smiley init");
@@ -202,6 +236,7 @@ impl Lilka {
             peripherals: unsafe { Peripherals::steal() },
             delay,
             buzzer: Buzzer(peripherals.GPIO11),
+            display,
         })
 
         // let spi = NoopMutex::new(RefCell::new(spi));

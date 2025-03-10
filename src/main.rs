@@ -1,12 +1,13 @@
-#![no_std]
 #![no_main]
+#![no_std]
 #![feature(impl_trait_in_assoc_type)]
-
 #![allow(warnings)]
 
 use embassy_executor::Spawner;
 // mod cfg;
 use embassy_time::{Duration, Timer};
+use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
 use embedded_hal::digital::OutputPin;
 use esp_backtrace as _;
 
@@ -49,14 +50,20 @@ async fn buzz(mut buzzer: Output<'static>) {
 async fn main(spawner: Spawner) -> ! {
     let mut lilka = Lilka::new(Configuration::default()).unwrap();
 
+    lilka.display.clear(Rgb565::WHITE).unwrap();
+    let syst = SystemTimer::new(lilka.peripherals.SYSTIMER);
+    // rustilka::hal::embassy::init(&lilka.clock, syst);
+    // let executor = EXECUTOR.init(embassy::executor::Executor::new());
+    // executor.run(|spawn| spawn.spawn(run(lilka.state, lilka.display)).unwrap());
+
     let timg0 = TimerGroup::new(lilka.peripherals.TIMG0);
     esp_hal_embassy::init(timg0.timer0);
+
+    // println!("FROM MAIN {:?}: ", lilka.display.is_sleeping());
 
     spawner.spawn(run()).ok();
 
     // let mut buzzer = Output::new(lilka.peripherals.GPIO11, Level::High);
-
-    // spawner.spawn(buzz(buzzer)).ok();
 
     loop {
         println!("Ping!");
