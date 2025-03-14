@@ -16,10 +16,11 @@ embedded-sdmmc = "0.8.1"
 #esp-hal-embassy = { version = "0.6.0", features = ["esp32s3"] }
 esp-hal-embassy = { version = "0.7.0", features = ["esp32s3"] }
 
-esp-backtrace = { version = "0.15.0", features = ["esp32s3", "panic-handler", "exception-handler", "println"] }
+esp-backtrace = { version = "0.15.0", features = ["esp32s3", "exception-handler", "panic-handler", "print-float-registers", "colors", "println"] }
+#panic-probe = { version = "1.0.0-rc.1", features = ["print-defmt"] }
 esp-hal = { version = "1.0.0-beta.0", features = ["esp32s3", "__esp_hal_embassy", "unstable", "debug"] }
 #esp-hal = { version = "0.23.1", features = ["esp32s3", "__esp_hal_embassy", "unstable", "debug"] }
-esp-println = { version = "0.13.0", default-features = false, features = ["jtag-serial", "esp32s3", "log"] }
+esp-println = { version = "0.13.1", default-features = false, features = ["jtag-serial", "esp32s3", "log"] }
 fugit = "0.3.7"
 mipidsi = "0.9.0"
 xtensa-lx-rt = { version = "0.18.0", features = ["esp32s3"] }

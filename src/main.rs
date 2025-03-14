@@ -32,7 +32,7 @@ use rustilka::Lilka;
 async fn run() {
     loop {
         esp_println::println!("Hello world from task!");
-        Timer::after(Duration::from_millis(1_000)).await;
+        Timer::after(Duration::from_millis(40_000)).await;
     }
 }
 #[embassy_executor::task]
@@ -50,7 +50,7 @@ async fn buzz(mut buzzer: Output<'static>) {
 async fn main(spawner: Spawner) -> ! {
     let mut lilka = Lilka::new(Configuration::default()).unwrap();
 
-    lilka.display.clear(Rgb565::WHITE).unwrap();
+    // lilka.display.clear(Rgb565::WHITE).unwrap();
     let syst = SystemTimer::new(lilka.peripherals.SYSTIMER);
     // rustilka::hal::embassy::init(&lilka.clock, syst);
     // let executor = EXECUTOR.init(embassy::executor::Executor::new());
@@ -72,6 +72,6 @@ async fn main(spawner: Spawner) -> ! {
         // buzzer_delay.delay_millis(1000);
         // buzzer.set_low();
 
-        Timer::after(Duration::from_millis(10_000)).await;
+        Timer::after(Duration::from_millis(50_000)).await;
     }
 }
