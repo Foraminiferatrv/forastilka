@@ -103,16 +103,16 @@ impl Lilka {
         });
 
         //Display initialization
-        let mut pin45 = Output::new(
-            peripherals.GPIO45,
+        let mut pin46 = Output::new(
+            peripherals.GPIO46,
             Level::High,
             OutputConfig::default()
                 .with_drive_mode(DriveMode::PushPull)
                 .with_pull(Pull::Down),
         );
-        pin45.set_high();
+        pin46.set_high();
 
-        dbg!(pin45.output_level());
+        dbg!(pin46.output_level());
 
         // Disable the RTC and TIMG watchdog timers
         // println!("Disabling watchdog timers...");
@@ -222,7 +222,7 @@ impl Lilka {
         // delay.delay_ms(150);
 
         // Make the display all white
-        display.clear(Rgb565::WHITE).unwrap();
+        display.clear(Rgb565::BLACK).unwrap();
 
         // let display_dcs = unsafe { display.dcs() };
 
