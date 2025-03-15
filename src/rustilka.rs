@@ -1,11 +1,9 @@
-use core::any::Any;
 use core::cell::RefCell;
 use core::fmt::Debug;
-use display_interface_spi::SPIInterface;
-use embassy_sync::blocking_mutex::NoopMutex;
+
 use esp_hal::delay::Delay;
-use esp_hal::gpio::{DriveMode, GpioPin, Input, Io, Level, Output, OutputConfig, Pin, Pull};
-use esp_hal::peripherals::{ADC1, Peripherals, SPI2};
+use esp_hal::gpio::{DriveMode, GpioPin, Input, Level, Output, OutputConfig, Pin, Pull};
+use esp_hal::peripherals::Peripherals;
 
 use mipidsi::interface::{Interface, SpiInterface};
 use mipidsi::models::ST7789;
@@ -22,7 +20,7 @@ use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle, Triangle}
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::SpiDevice;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay, RefCellDevice};
-
+use embedded_sdmmc::{Mode as SDMode, SdCard, TimeSource, Timestamp, VolumeIdx, VolumeManager};
 use esp_hal::clock::{Clock, CpuClock};
 
 use esp_hal::rtc_cntl::Rtc;
@@ -58,15 +56,30 @@ pub type LilkaDisplay = Display<
     ST7789,
     NoResetPin,
 >;
-// pub type LilkaDisplay = Display<
-//     SpiInterface<
-//         'static,
-//         ExclusiveDevice<Spi<'static, Blocking>, Output<'static>, NoDelay>,
-//         Output<'static>,
-//     >,
-//     ST7789,
-//     NoResetPin,
-// >;
+#[derive(Default)]
+pub struct DummyTimesource();
+impl TimeSource for DummyTimesource {
+    fn get_timestamp(&self) -> Timestamp {
+        Timestamp {
+            year_since_1970: 0,
+            zero_indexed_month: 0,
+            zero_indexed_day: 0,
+            hours: 0,
+            minutes: 0,
+            seconds: 0,
+        }
+    }
+}
+
+type SDC = SdCard<
+    SpiInterface<
+        'static,
+        RefCellDevice<'static, Spi<'static, Blocking>, Output<'static>, Delay>,
+        Output<'static>,
+    >,
+    Delay,
+>;
+pub type SdVolMgr = VolumeManager<SDC, DummyTimesource>;
 
 pub struct Buzzer(Output<'static>);
 // pub struct Battery {
@@ -90,7 +103,7 @@ pub struct Lilka {
 pub static EXECUTOR: StaticCell<esp_hal_embassy::Executor> = StaticCell::new();
 static DISPLAY_BUFFER_CELL: StaticCell<[u8; 512]> = StaticCell::new();
 static SPI_CELL: StaticCell<RefCell<Spi<'static, Blocking>>> = StaticCell::new();
-
+pub struct SD;
 impl Lilka {
     pub fn new(lilka_config: Configuration) -> Result<Self, &'static str> {
         println!("===Lilka init===");
@@ -148,18 +161,10 @@ impl Lilka {
         let mosi = peripherals.GPIO17; //good
         let miso = peripherals.GPIO8; //good
         let sck = peripherals.GPIO18; //good
-        // let mut rst = Output::new(
-        //     peripherals.GPIO35,
-        //     Level::High,
-        //     OutputConfig::default().with_drive_mode(DriveMode::PushPull),
-        // );
-        // rst.set_high();
 
         let spi_config: Config = Config::default()
             .with_frequency(Rate::from_mhz(60))
             .with_mode(Mode::_0);
-        // .with_write_bit_order(BitOrder::MsbFirst)
-        // .with_read_bit_order(BitOrder::MsbFirst);
 
         let spi = Spi::new(peripherals.SPI2, spi_config)
             .unwrap()
@@ -167,9 +172,9 @@ impl Lilka {
             .with_mosi(mosi)
             .with_miso(miso);
 
-        let spi_static = SPI_CELL.init(RefCell::new(spi));
-        // let spi_device = match RefCellDevice::new_no_delay(spi_static, disp_cs) {
-        let spi_device = match RefCellDevice::new(spi_static, disp_cs.get_mut(), delay) {
+        let spi_bus = SPI_CELL.init(RefCell::new(spi));
+        // let spi_device = match RefCellDevice::new_no_delay(spi_bus, disp_cs) {
+        let spi_device = match RefCellDevice::new(spi_bus, disp_cs.get_mut(), delay) {
             Ok(spi_device) => {
                 println!("\x1b[42m[OK]\x1b[0m SPI device init");
                 spi_device
@@ -183,8 +188,7 @@ impl Lilka {
         // Define the display interface with no chip select
         let display_buffer = DISPLAY_BUFFER_CELL.init([0_u8; 512]);
 
-        let mut di = SpiInterface::new(spi_device, disp_dc, display_buffer);
-        // let mut di = SPIInterface::new(spi_device, disp_dc);
+        let di = SpiInterface::new(spi_device, disp_dc, display_buffer);
 
         // Define the display from the display interface and initialize it
         println!("Display initialization...");
@@ -214,31 +218,8 @@ impl Lilka {
 
         display.set_tearing_effect(TearingEffect::Off).unwrap();
 
-        // println!("[display]: {:?}", display);
-
-        // display.set_tearing_effect(TearingEffect::Off).unwrap();
-        // let dcs = unsafe { display.dcs() };
-        // dcs.write_command(SoftReset).unwrap();
-        // delay.delay_ms(150);
-
-        // Make the display all white
+        // Make the display all black
         display.clear(Rgb565::BLACK).unwrap();
-
-        // let display_dcs = unsafe { display.dcs() };
-
-        // match display_dcs.write_command(mipidsi::dcs::SoftReset) {
-        //     Ok(_) => {
-        //         println!("\x1b[42m[DCS]\x1b[0m ");
-        //     }
-        //     Err(e) => {
-        //         println!("[ERROR] DCS: {:?}", e);
-        //         return Err("Display init failed");
-        //     }
-        // }
-        // delay.delay_millis(150);
-
-        // println!("Display wake");
-
         // Draw a smiley face with white eyes and a red mouth
 
         draw_smiley(&mut display).unwrap();
@@ -249,6 +230,65 @@ impl Lilka {
             Level::Low,
             OutputConfig::default().with_drive_mode(DriveMode::PushPull),
         );
+
+        //===SD Card initialization===
+        let sd_cs = Output::new(peripherals.GPIO16, Level::Low, OutputConfig::default());
+        // let sd_spi = SpiDevice::new(spi_bus, sd_cs);
+        let sd_spi = match RefCellDevice::new(spi_bus, sd_cs, delay) {
+            Ok(spi_device) => {
+                println!("\x1b[42m[OK]\x1b[0m SD SPI device init");
+                spi_device
+            }
+            Err(e) => {
+                println!("[ERROR] SD SPI init failed: {:?}", e);
+                return Err("SD SPI init failed");
+            }
+        };
+
+        let sdcard = SdCard::new(sd_spi, delay);
+        println!("Card size is {} bytes", sdcard.num_bytes().unwrap());
+        let mut volume_mgr = VolumeManager::new(sdcard, DummyTimesource::default());
+        let mut volume0 = volume_mgr.open_volume(VolumeIdx(0)).unwrap();
+        println!("Volume 0: {:?}", volume0);
+
+        let mut root_dir = RefCell::new(volume0.open_root_dir().unwrap());
+
+        //SD CARD TESTS:
+        const FILE_TO_CREATE: &str = "CREATE.TXT";
+
+        {
+            let mut f = root_dir
+                .get_mut()
+                .open_file_in_dir(FILE_TO_CREATE, SDMode::ReadWriteCreate)
+                .unwrap();
+            match f.write(b"Hello, this is a new file on disk\r\n") {
+                Ok(_) => println!("File written"),
+                Err(e) => println!("Error writing file: {:?}", e),
+            };
+        }
+
+        {
+            let mut my_file = match root_dir
+                .get_mut()
+                .open_file_in_dir(FILE_TO_CREATE, SDMode::ReadOnly)
+            {
+                Ok(file) => file,
+                Err(e) => {
+                    println!("Error opening file: {:?}", e);
+                    return Err("Error opening file");
+                }
+            };
+
+            while !my_file.is_eof() {
+                let mut buffer = [0u8; 32];
+                let num_read = my_file.read(&mut buffer).unwrap();
+                for b in &buffer[0..num_read] {
+                    print!("{}", *b as char);
+                }
+            }
+        }
+
+        //SD CARD TESTS END:
 
         Ok(Lilka {
             peripherals: unsafe { Peripherals::steal() },
