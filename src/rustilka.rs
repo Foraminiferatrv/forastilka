@@ -2,7 +2,7 @@ use core::cell::RefCell;
 use core::fmt::Debug;
 
 use esp_hal::delay::Delay;
-use esp_hal::gpio::{DriveMode, GpioPin, Input, Level, Output, OutputConfig, Pin, Pull};
+use esp_hal::gpio::{DriveMode, Input, Level, Output, OutputConfig, Pull};
 use esp_hal::peripherals::Peripherals;
 
 use mipidsi::interface::{Interface, SpiInterface};
@@ -14,25 +14,19 @@ use crate::cfg::Configuration;
 
 use embedded_graphics::Drawable;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
-use embedded_graphics::prelude::{DrawTarget, Point, Primitive, Size};
-use embedded_graphics::primitives::{Circle, PrimitiveStyle, Rectangle, Triangle};
+use embedded_graphics::prelude::{DrawTarget, Point, Primitive};
+use embedded_graphics::primitives::{Circle, PrimitiveStyle, Triangle};
 
 use embedded_hal::digital::OutputPin;
-use embedded_hal::spi::SpiDevice;
-use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay, RefCellDevice};
-use embedded_sdmmc::{Mode as SDMode, SdCard, TimeSource, Timestamp, VolumeIdx, VolumeManager};
-use esp_hal::clock::{Clock, CpuClock};
+use embedded_hal_bus::spi::RefCellDevice;
+use embedded_sdmmc::{SdCard, TimeSource, Timestamp, VolumeManager};
+use esp_hal::clock::CpuClock;
 
-use crate::modules::sd_card::{LilkaSDCard, SdVolMgr};
-use esp_hal::rtc_cntl::Rtc;
+use esp_hal::Blocking;
+use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config, Spi};
-use esp_hal::spi::{BitOrder, Mode};
 use esp_hal::time::Rate;
-use esp_hal::timer::timg::TimerGroup;
-use esp_hal::{Async, Blocking, DriverMode};
-use esp_println::{dbg, print, println};
-use log::debug;
-use mipidsi::dcs::{InterfaceExt, SoftReset};
+use esp_println::{dbg, println};
 use static_cell::StaticCell;
 
 pub struct InputState {
@@ -57,30 +51,15 @@ pub type LilkaDisplay = Display<
     ST7789,
     NoResetPin,
 >;
-// #[derive(Default)]
-// pub struct DummyTimesource();
-// impl TimeSource for DummyTimesource {
-//     fn get_timestamp(&self) -> Timestamp {
-//         Timestamp {
-//             year_since_1970: 0,
-//             zero_indexed_month: 0,
-//             zero_indexed_day: 0,
-//             hours: 0,
-//             minutes: 0,
-//             seconds: 0,
-//         }
-//     }
-// }
-//
-// type SDC = SdCard<
+// pub type LilkaDisplay = Display<
 //     SpiInterface<
 //         'static,
 //         RefCellDevice<'static, Spi<'static, Blocking>, Output<'static>, Delay>,
 //         Output<'static>,
 //     >,
-//     Delay,
+//     ST7789,
+//     NoResetPin,
 // >;
-// pub type SdVolMgr = VolumeManager<SDC, DummyTimesource>;
 
 pub struct Buzzer(Output<'static>);
 // pub struct Battery {
@@ -90,12 +69,12 @@ pub struct Buzzer(Output<'static>);
 pub struct Lilka {
     pub peripherals: Peripherals,
     pub delay: Delay,
-    // pub display: LilkaDisplay,
+    pub display: LilkaDisplay,
 
     //Other fields
     // pub state: InputState,
     // pub display,
-    pub sd_volume_manager: SdVolMgr<'static>,
+    pub sd_volume_manager: SdVolMgr,
     // pub serial: Uart<'static, UART0, Async>,
     // pub battery: Battery,
     pub buzzer: Buzzer,
@@ -104,7 +83,29 @@ pub struct Lilka {
 pub static EXECUTOR: StaticCell<esp_hal_embassy::Executor> = StaticCell::new();
 static DISPLAY_BUFFER_CELL: StaticCell<[u8; 512]> = StaticCell::new();
 static SPI_CELL: StaticCell<RefCell<Spi<'static, Blocking>>> = StaticCell::new();
+
+//==SD Card==
 pub struct SD;
+
+#[derive(Default)]
+pub struct DummyTimesource();
+
+impl TimeSource for DummyTimesource {
+    fn get_timestamp(&self) -> Timestamp {
+        Timestamp {
+            year_since_1970: 0,
+            zero_indexed_month: 0,
+            zero_indexed_day: 0,
+            hours: 0,
+            minutes: 0,
+            seconds: 0,
+        }
+    }
+}
+type SDC<'a> = SdCard<RefCellDevice<'a, Spi<'a, Blocking>, Output<'a>, Delay>, Delay>;
+
+pub type SdVolMgr = VolumeManager<SDC<'static>, DummyTimesource>;
+
 impl Lilka {
     pub fn new(lilka_config: Configuration) -> Result<Self, &'static str> {
         println!("===Lilka init===");
@@ -128,18 +129,6 @@ impl Lilka {
 
         dbg!(pin46.output_level());
 
-        // Disable the RTC and TIMG watchdog timers
-        // println!("Disabling watchdog timers...");
-        // let mut rtc = Rtc::new(peripherals.LPWR);
-        // let timer_group0 = TimerGroup::new(peripherals.TIMG0);
-        // let mut wdt0 = timer_group0.wdt;
-        // let timer_group1 = TimerGroup::new(peripherals.TIMG1);
-        // let mut wdt1 = timer_group1.wdt;
-        // rtc.swd.disable();
-        // rtc.rwdt.disable();
-        // wdt0.disable();
-        // wdt1.disable();
-
         // Define the delay struct, needed for the display driver
         let mut delay = Delay::new();
 
@@ -151,11 +140,11 @@ impl Lilka {
             OutputConfig::default().with_drive_mode(DriveMode::PushPull),
         );
 
-        let mut disp_cs = RefCell::new(Output::new(
+        let disp_cs = Output::new(
             peripherals.GPIO7,
             Level::Low,
             OutputConfig::default().with_drive_mode(DriveMode::PushPull),
-        )); //good pin
+        );
 
         dbg!(disp_dc.output_level());
 
@@ -175,7 +164,7 @@ impl Lilka {
 
         let spi_bus = SPI_CELL.init(RefCell::new(spi));
         // let spi_device = match RefCellDevice::new_no_delay(spi_bus, disp_cs) {
-        let spi_device = match RefCellDevice::new(spi_bus, disp_cs.get_mut(), delay) {
+        let spi_device = match RefCellDevice::new(spi_bus, disp_cs, delay) {
             Ok(spi_device) => {
                 println!("\x1b[42m[OK]\x1b[0m SPI device init");
                 spi_device
@@ -195,7 +184,6 @@ impl Lilka {
         println!("Display initialization...");
 
         let mut display = match Builder::new(ST7789, di)
-            // .reset_pin(rst)
             .refresh_order(lilka_config.display_refresh_order)
             .invert_colors(ColorInversion::Inverted)
             .display_size(240, 280)
@@ -221,61 +209,36 @@ impl Lilka {
 
         // Make the display all black
         display.clear(Rgb565::BLACK).unwrap();
-        // Draw a smiley face with white eyes and a red mouth
-
-        draw_smiley(&mut display).unwrap();
 
         //===Buzzer initialization===
-        let mut buzzer = Output::new(
+        let buzzer = Output::new(
             peripherals.GPIO11,
             Level::Low,
             OutputConfig::default().with_drive_mode(DriveMode::PushPull),
         );
 
-        let lilka_sd_card = LilkaSDCard::init(spi_bus, peripherals.GPIO16, delay).unwrap();
-        let mut volume_mgr = lilka_sd_card.volume_manager;
+        let sd_cs = Output::new(peripherals.GPIO16, Level::Low, OutputConfig::default());
+        let sd_spi = match RefCellDevice::new(spi_bus, sd_cs, delay) {
+            Ok(spi_device) => {
+                println!("\x1b[42m[OK]\x1b[0m SD SPI device init");
+                spi_device
+            }
+            Err(e) => {
+                println!("[ERROR] SD SPI init failed: {:?}", e);
+                return Err("SD SPI init failed");
+            }
+        };
+
+        let sdcard = SdCard::new(sd_spi, delay);
+        println!("Card size is {} bytes", sdcard.num_bytes().unwrap());
+        let mut sd_volume_manager = VolumeManager::new(sdcard, DummyTimesource::default());
 
         Ok(Lilka {
             peripherals: unsafe { Peripherals::steal() },
             delay,
             buzzer: Buzzer(buzzer),
-            sd_volume_manager: volume_mgr,
-            // display,
+            sd_volume_manager,
+            display,
         })
     }
-}
-
-fn draw_smiley<T: DrawTarget<Color = Rgb565>>(display: &mut T) -> Result<(), T::Error> {
-    println!("Draw start");
-
-    // Draw the left eye as a circle located at (50, 100), with a diameter of 40, filled with white
-    Circle::new(Point::new(50, 100), 40)
-        .into_styled(PrimitiveStyle::with_fill(Rgb565::WHITE))
-        .draw(display)?;
-
-    // Draw the right eye as a circle located at (50, 200), with a diameter of 40, filled with white
-    Circle::new(Point::new(50, 200), 40)
-        .into_styled(PrimitiveStyle::with_fill(Rgb565::WHITE))
-        .draw(display)?;
-
-    // Draw an upside down red triangle to represent a smiling mouth
-    Triangle::new(
-        Point::new(130, 140),
-        Point::new(130, 200),
-        Point::new(160, 170),
-    )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::RED))
-    .draw(display)?;
-
-    // Cover the top part of the mouth with a black triangle so it looks closed instead of open
-    Triangle::new(
-        Point::new(130, 150),
-        Point::new(130, 190),
-        Point::new(150, 170),
-    )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK))
-    .draw(display)?;
-    println!("Draw end");
-
-    Ok(())
 }

@@ -2,23 +2,34 @@
 #![no_std]
 #![feature(impl_trait_in_assoc_type)]
 #![allow(warnings)]
+
 use core::cell::RefCell;
 use embassy_executor::Spawner;
+use esp_backtrace as _; //Required as panic_handler
+
 use embedded_sdmmc::Mode as SDMode;
-// mod cfg;
+
 use embassy_time::{Duration, Timer};
+use embedded_graphics::Drawable;
 use embedded_graphics::draw_target::DrawTarget;
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::mono_font::ascii::FONT_6X13_BOLD;
+use embedded_graphics::mono_font::iso_8859_16::FONT_9X18_BOLD;
 use embedded_graphics::pixelcolor::{Rgb565, RgbColor};
+use embedded_graphics::prelude::{Point, Size};
+use embedded_graphics::primitives::Rectangle;
 use embedded_hal::digital::OutputPin;
 use embedded_sdmmc::VolumeIdx;
-use esp_backtrace as _;
 
 use esp_hal;
-use esp_hal::delay::Delay;
-use esp_hal::gpio::{Input, Level, Output};
+use esp_hal::gpio::Output;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
 
+use embedded_text;
+use embedded_text::TextBox;
+use embedded_text::alignment::{HorizontalAlignment, VerticalAlignment};
+use embedded_text::style::{HeightMode, TextBoxStyleBuilder};
 use esp_hal_embassy;
 use esp_hal_embassy::Executor;
 use esp_println::{print, println};
@@ -52,43 +63,28 @@ async fn buzz(mut buzzer: Output<'static>) {
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
     let mut lilka = Lilka::new(Configuration::default()).unwrap();
+    let mut display = lilka.display;
 
-    //SD CARD TESTS:
     let mut volume0 = lilka.sd_volume_manager.open_volume(VolumeIdx(0)).unwrap();
     println!("Volume 0: {:?}", volume0);
-    let mut root_dir = RefCell::new(volume0.open_root_dir().unwrap());
-    const FILE_TO_CREATE: &str = "CREATE3.TXT";
-
-    {
-        let mut f = root_dir
-            .get_mut()
-            .open_file_in_dir(FILE_TO_CREATE, SDMode::ReadWriteCreate)
-            .unwrap();
-        match f.write(b"Hello, this is a new file 3 on disk\r\n") {
-            Ok(_) => println!("File written"),
-            Err(e) => println!("Error writing file: {:?}", e),
-        };
-    }
-
-    {
-        let mut my_file = root_dir
-            .get_mut()
-            .open_file_in_dir(FILE_TO_CREATE, SDMode::ReadOnly)
-            .unwrap();
-
-        while !my_file.is_eof() {
-            let mut buffer = [0u8; 32];
-            let num_read = my_file.read(&mut buffer).unwrap();
-            for b in &buffer[0..num_read] {
-                print!("{}", *b as char);
-            }
-        }
-    }
 
     let syst = SystemTimer::new(lilka.peripherals.SYSTIMER);
 
     let timg0 = TimerGroup::new(lilka.peripherals.TIMG0);
     esp_hal_embassy::init(timg0.timer0);
+
+    let greeting_text = "Hello World...";
+
+    let char_style = MonoTextStyle::new(&FONT_9X18_BOLD, Rgb565::WHITE);
+    let textbox_style = TextBoxStyleBuilder::new()
+        .height_mode(HeightMode::FitToText)
+        .alignment(HorizontalAlignment::Justified)
+        .vertical_alignment(VerticalAlignment::Bottom)
+        .build();
+    let bounds = Rectangle::new(Point::new(10, 20), Size::new(280, 0));
+    let text_box = TextBox::with_textbox_style(greeting_text, bounds, char_style, textbox_style);
+
+    text_box.draw(&mut display).unwrap();
 
     spawner.spawn(run()).ok();
 
