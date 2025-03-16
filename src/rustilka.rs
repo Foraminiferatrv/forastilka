@@ -23,6 +23,7 @@ use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay, RefCellDevice};
 use embedded_sdmmc::{Mode as SDMode, SdCard, TimeSource, Timestamp, VolumeIdx, VolumeManager};
 use esp_hal::clock::{Clock, CpuClock};
 
+use crate::modules::sd_card::{LilkaSDCard, SdVolMgr};
 use esp_hal::rtc_cntl::Rtc;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::spi::{BitOrder, Mode};
@@ -56,30 +57,30 @@ pub type LilkaDisplay = Display<
     ST7789,
     NoResetPin,
 >;
-#[derive(Default)]
-pub struct DummyTimesource();
-impl TimeSource for DummyTimesource {
-    fn get_timestamp(&self) -> Timestamp {
-        Timestamp {
-            year_since_1970: 0,
-            zero_indexed_month: 0,
-            zero_indexed_day: 0,
-            hours: 0,
-            minutes: 0,
-            seconds: 0,
-        }
-    }
-}
-
-type SDC = SdCard<
-    SpiInterface<
-        'static,
-        RefCellDevice<'static, Spi<'static, Blocking>, Output<'static>, Delay>,
-        Output<'static>,
-    >,
-    Delay,
->;
-pub type SdVolMgr = VolumeManager<SDC, DummyTimesource>;
+// #[derive(Default)]
+// pub struct DummyTimesource();
+// impl TimeSource for DummyTimesource {
+//     fn get_timestamp(&self) -> Timestamp {
+//         Timestamp {
+//             year_since_1970: 0,
+//             zero_indexed_month: 0,
+//             zero_indexed_day: 0,
+//             hours: 0,
+//             minutes: 0,
+//             seconds: 0,
+//         }
+//     }
+// }
+//
+// type SDC = SdCard<
+//     SpiInterface<
+//         'static,
+//         RefCellDevice<'static, Spi<'static, Blocking>, Output<'static>, Delay>,
+//         Output<'static>,
+//     >,
+//     Delay,
+// >;
+// pub type SdVolMgr = VolumeManager<SDC, DummyTimesource>;
 
 pub struct Buzzer(Output<'static>);
 // pub struct Battery {
@@ -94,7 +95,7 @@ pub struct Lilka {
     //Other fields
     // pub state: InputState,
     // pub display,
-    // pub sd_vol_mgr: SdVolMgr,
+    pub sd_volume_manager: SdVolMgr<'static>,
     // pub serial: Uart<'static, UART0, Async>,
     // pub battery: Battery,
     pub buzzer: Buzzer,
@@ -231,69 +232,14 @@ impl Lilka {
             OutputConfig::default().with_drive_mode(DriveMode::PushPull),
         );
 
-        //===SD Card initialization===
-        let sd_cs = Output::new(peripherals.GPIO16, Level::Low, OutputConfig::default());
-        // let sd_spi = SpiDevice::new(spi_bus, sd_cs);
-        let sd_spi = match RefCellDevice::new(spi_bus, sd_cs, delay) {
-            Ok(spi_device) => {
-                println!("\x1b[42m[OK]\x1b[0m SD SPI device init");
-                spi_device
-            }
-            Err(e) => {
-                println!("[ERROR] SD SPI init failed: {:?}", e);
-                return Err("SD SPI init failed");
-            }
-        };
-
-        let sdcard = SdCard::new(sd_spi, delay);
-        println!("Card size is {} bytes", sdcard.num_bytes().unwrap());
-        let mut volume_mgr = VolumeManager::new(sdcard, DummyTimesource::default());
-        let mut volume0 = volume_mgr.open_volume(VolumeIdx(0)).unwrap();
-        println!("Volume 0: {:?}", volume0);
-
-        let mut root_dir = RefCell::new(volume0.open_root_dir().unwrap());
-
-        //SD CARD TESTS:
-        const FILE_TO_CREATE: &str = "CREATE.TXT";
-
-        {
-            let mut f = root_dir
-                .get_mut()
-                .open_file_in_dir(FILE_TO_CREATE, SDMode::ReadWriteCreate)
-                .unwrap();
-            match f.write(b"Hello, this is a new file on disk\r\n") {
-                Ok(_) => println!("File written"),
-                Err(e) => println!("Error writing file: {:?}", e),
-            };
-        }
-
-        {
-            let mut my_file = match root_dir
-                .get_mut()
-                .open_file_in_dir(FILE_TO_CREATE, SDMode::ReadOnly)
-            {
-                Ok(file) => file,
-                Err(e) => {
-                    println!("Error opening file: {:?}", e);
-                    return Err("Error opening file");
-                }
-            };
-
-            while !my_file.is_eof() {
-                let mut buffer = [0u8; 32];
-                let num_read = my_file.read(&mut buffer).unwrap();
-                for b in &buffer[0..num_read] {
-                    print!("{}", *b as char);
-                }
-            }
-        }
-
-        //SD CARD TESTS END:
+        let lilka_sd_card = LilkaSDCard::init(spi_bus, peripherals.GPIO16, delay).unwrap();
+        let mut volume_mgr = lilka_sd_card.volume_manager;
 
         Ok(Lilka {
             peripherals: unsafe { Peripherals::steal() },
             delay,
             buzzer: Buzzer(buzzer),
+            sd_volume_manager: volume_mgr,
             // display,
         })
     }

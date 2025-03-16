@@ -9,6 +9,7 @@
   <component name="ChangeListManager">
     <list default="true" id="ebfdb348-cdee-4c63-b24c-9cd833b95fd8" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/rustilka.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/rustilka.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -112,11 +113,23 @@
       <workItem from="1741956294043" duration="2078000" />
       <workItem from="1741958420525" duration="7508000" />
       <workItem from="1741987184410" duration="31000" />
+      <workItem from="1742037233463" duration="7150000" />
     </task>
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
