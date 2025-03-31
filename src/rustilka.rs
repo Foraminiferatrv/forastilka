@@ -1,5 +1,6 @@
 use core::cell::RefCell;
 use core::fmt::Debug;
+use core::ops::DerefMut;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex, RawMutex};
 use embassy_sync::blocking_mutex::{CriticalSectionMutex, NoopMutex};
 use esp_hal::delay::Delay;
@@ -25,13 +26,13 @@ use embedded_sdmmc::{SdCard, TimeSource, Timestamp, VolumeManager};
 use esp_hal::clock::CpuClock;
 
 use embassy_sync::blocking_mutex::Mutex as EmbassyMutex;
-
+use embassy_sync::once_lock::OnceLock;
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
 use esp_hal::{Async, Blocking, DriverMode};
 use esp_println::{dbg, println};
-use static_cell::StaticCell;
+use static_cell::{ConstStaticCell, StaticCell};
 use xtensa_lx_rt::xtensa_lx::_export::critical_section::Mutex;
 
 pub struct InputState {
@@ -50,7 +51,7 @@ pub struct InputState {
 pub type LilkaDisplay =
     Display<SpiInterface<'static, CriticalSectionDevice<'static, Spi<'static, Async>, Output<'static>, Delay>, Output<'static>>, ST7789, NoResetPin>;
 // pub type LilkaDisplayMutex = &'static mut EmbassyMutex<CriticalSectionRawMutex, &'static mut LilkaDisplay>;
-pub type LilkaDisplayMutex = &'static mut EmbassyMutex<CriticalSectionRawMutex, RefCell<&'static mut LilkaDisplay>>;
+pub type LilkaDisplayMutex = EmbassyMutex<CriticalSectionRawMutex, RefCell<&'static mut LilkaDisplay>>;
 
 pub struct Buzzer(Output<'static>);
 // pub struct Battery {
@@ -61,7 +62,7 @@ pub struct Lilka {
     pub peripherals: Peripherals,
     pub delay: Delay,
     // pub display: &'static mut Mutex<LilkaDisplay>,
-    pub display: LilkaDisplayMutex,
+    // pub display: LilkaDisplayMutex,
 
     //Other fields
     pub input_state: InputState,
@@ -78,8 +79,10 @@ static SPI_CELL: StaticCell<Mutex<RefCell<Spi<'static, Async>>>> = StaticCell::n
 
 static DISPLAY_BUFFER_CELL: StaticCell<[u8; 512]> = StaticCell::new();
 // static DISPLAY_MUTEX: Mutex<StaticCell<LilkaDisplay>> = Mutex::new(StaticCell::new());
-static DISPLAY_CELL: StaticCell<LilkaDisplay> = StaticCell::new();
-pub static DISPLAY_MUTEX: StaticCell<EmbassyMutex<CriticalSectionRawMutex, RefCell<&mut LilkaDisplay>>> = StaticCell::new();
+pub static DISPLAY_CELL: StaticCell<LilkaDisplay> = StaticCell::new();
+// pub static DISPLAY_MUTEX: EmbassyMutex<Critica   lSectionRawMutex, ConstStaticCell<Option<LilkaDisplay>>> = EmbassyMutex::new(ConstStaticCell::new(None)); //works
+pub static DISPLAY: ConstStaticCell<EmbassyMutex<CriticalSectionRawMutex, RefCell<Option<&mut LilkaDisplay>>>> =
+    ConstStaticCell::new(EmbassyMutex::new(RefCell::new(None)));
 static GPIO_CELL: StaticCell<Mutex<Peripherals>> = StaticCell::new();
 
 //==SD Card==
@@ -196,13 +199,17 @@ impl Lilka {
 
         // let display = DISPLAY_CELL.init(Mutex::new(display));
 
-        let display_mutex = DISPLAY_MUTEX.init(EmbassyMutex::new(RefCell::new(DISPLAY_CELL.init(display))));
-        // DISPLAY_MUTEX.lock(|cell| {
-        //     cell.init(display);
-        //     cell.re
+        // let display_mutex = DISPLAY_MUTEX.init(EmbassyMutex::new(RefCell::new(DISPLAY_CELL.init(display))));
+        // DISPLAY_MUTEX.lock(|mu| {
+        //     mu.
         // });
+        let mut cell = DISPLAY.take();
 
-        //===Buzzer initialization===
+        let disp_ref = DISPLAY_CELL.init(display);
+
+        cell.lock(|c| c.borrow_mut().replace(disp_ref));
+
+        //===Buzzer initialization===f
         let mut buzzer = Output::new(peripherals.GPIO11, Level::Low, OutputConfig::default().with_drive_mode(DriveMode::PushPull));
 
         //===SD Card initialization===
@@ -244,7 +251,7 @@ impl Lilka {
             buzzer: Buzzer(buzzer),
             input_state,
             sd_volume_manager,
-            display: display_mutex,
+            // display: display_mutex,
         })
     }
 }
