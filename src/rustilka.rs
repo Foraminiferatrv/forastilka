@@ -1,8 +1,9 @@
 use core::cell::RefCell;
 use core::fmt::Debug;
-
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex, RawMutex};
+use embassy_sync::blocking_mutex::{CriticalSectionMutex, NoopMutex};
 use esp_hal::delay::Delay;
-use esp_hal::gpio::{DriveMode, Input, Level, Output, OutputConfig, Pull};
+use esp_hal::gpio::{DriveMode, GpioPin, Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::peripherals::Peripherals;
 
 use mipidsi::interface::{Interface, SpiInterface};
@@ -18,16 +19,20 @@ use embedded_graphics::prelude::{DrawTarget, Point, Primitive};
 use embedded_graphics::primitives::{Circle, PrimitiveStyle, Triangle};
 
 use embedded_hal::digital::OutputPin;
-use embedded_hal_bus::spi::RefCellDevice;
+use embedded_hal::spi::SpiBus;
+use embedded_hal_bus::spi::{CriticalSectionDevice, RefCellDevice};
 use embedded_sdmmc::{SdCard, TimeSource, Timestamp, VolumeManager};
 use esp_hal::clock::CpuClock;
 
-use esp_hal::Blocking;
+use embassy_sync::blocking_mutex::Mutex as EmbassyMutex;
+
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config, Spi};
 use esp_hal::time::Rate;
+use esp_hal::{Async, Blocking, DriverMode};
 use esp_println::{dbg, println};
 use static_cell::StaticCell;
+use xtensa_lx_rt::xtensa_lx::_export::critical_section::Mutex;
 
 pub struct InputState {
     pub up: Input<'static>,     // GPIO38
@@ -42,24 +47,10 @@ pub struct InputState {
     pub start: Input<'static>,  // GPIO4
 }
 
-pub type LilkaDisplay = Display<
-    SpiInterface<
-        'static,
-        RefCellDevice<'static, Spi<'static, Blocking>, Output<'static>, Delay>,
-        Output<'static>,
-    >,
-    ST7789,
-    NoResetPin,
->;
-// pub type LilkaDisplay = Display<
-//     SpiInterface<
-//         'static,
-//         RefCellDevice<'static, Spi<'static, Blocking>, Output<'static>, Delay>,
-//         Output<'static>,
-//     >,
-//     ST7789,
-//     NoResetPin,
-// >;
+pub type LilkaDisplay =
+    Display<SpiInterface<'static, CriticalSectionDevice<'static, Spi<'static, Async>, Output<'static>, Delay>, Output<'static>>, ST7789, NoResetPin>;
+// pub type LilkaDisplayMutex = &'static mut EmbassyMutex<CriticalSectionRawMutex, &'static mut LilkaDisplay>;
+pub type LilkaDisplayMutex = &'static mut EmbassyMutex<CriticalSectionRawMutex, RefCell<&'static mut LilkaDisplay>>;
 
 pub struct Buzzer(Output<'static>);
 // pub struct Battery {
@@ -69,11 +60,11 @@ pub struct Buzzer(Output<'static>);
 pub struct Lilka {
     pub peripherals: Peripherals,
     pub delay: Delay,
-    pub display: LilkaDisplay,
+    // pub display: &'static mut Mutex<LilkaDisplay>,
+    pub display: LilkaDisplayMutex,
 
     //Other fields
-    // pub state: InputState,
-    // pub display,
+    pub input_state: InputState,
     pub sd_volume_manager: SdVolMgr,
     // pub serial: Uart<'static, UART0, Async>,
     // pub battery: Battery,
@@ -81,8 +72,15 @@ pub struct Lilka {
     // pub i2s_tx: I2sTx<'static, I2S0, Channel0, Blocking>,
 }
 pub static EXECUTOR: StaticCell<esp_hal_embassy::Executor> = StaticCell::new();
+// static SPI_CELL: StaticCell<RefCell<Spi<'static, Blocking>>> = StaticCell::new();
+static SPI_CELL: StaticCell<Mutex<RefCell<Spi<'static, Async>>>> = StaticCell::new();
+// static SPI_MUTEX:
+
 static DISPLAY_BUFFER_CELL: StaticCell<[u8; 512]> = StaticCell::new();
-static SPI_CELL: StaticCell<RefCell<Spi<'static, Blocking>>> = StaticCell::new();
+// static DISPLAY_MUTEX: Mutex<StaticCell<LilkaDisplay>> = Mutex::new(StaticCell::new());
+static DISPLAY_CELL: StaticCell<LilkaDisplay> = StaticCell::new();
+pub static DISPLAY_MUTEX: StaticCell<EmbassyMutex<CriticalSectionRawMutex, RefCell<&mut LilkaDisplay>>> = StaticCell::new();
+static GPIO_CELL: StaticCell<Mutex<Peripherals>> = StaticCell::new();
 
 //==SD Card==
 pub struct SD;
@@ -102,12 +100,12 @@ impl TimeSource for DummyTimesource {
         }
     }
 }
-type SDC<'a> = SdCard<RefCellDevice<'a, Spi<'a, Blocking>, Output<'a>, Delay>, Delay>;
+type SDC<'a> = SdCard<CriticalSectionDevice<'a, Spi<'a, Async>, Output<'a>, Delay>, Delay>;
 
 pub type SdVolMgr = VolumeManager<SDC<'static>, DummyTimesource>;
 
 impl Lilka {
-    pub fn new(lilka_config: Configuration) -> Result<Self, &'static str> {
+    pub async fn new(lilka_config: Configuration) -> Result<Self, &'static str> {
         println!("===Lilka init===");
 
         // let peripherals: Peripherals = esp_hal::init(config);
@@ -121,30 +119,19 @@ impl Lilka {
         let mut pin46 = Output::new(
             peripherals.GPIO46,
             Level::High,
-            OutputConfig::default()
-                .with_drive_mode(DriveMode::PushPull)
-                .with_pull(Pull::Down),
+            OutputConfig::default().with_drive_mode(DriveMode::PushPull).with_pull(Pull::Down),
         );
         pin46.set_high();
 
         dbg!(pin46.output_level());
-
         // Define the delay struct, needed for the display driver
         let mut delay = Delay::new();
 
         //
         // Define the Data/Command select pin as a digital output
-        let mut disp_dc = Output::new(
-            peripherals.GPIO15,
-            Level::Low,
-            OutputConfig::default().with_drive_mode(DriveMode::PushPull),
-        );
+        let mut disp_dc = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default().with_drive_mode(DriveMode::PushPull));
 
-        let disp_cs = Output::new(
-            peripherals.GPIO7,
-            Level::Low,
-            OutputConfig::default().with_drive_mode(DriveMode::PushPull),
-        );
+        let disp_cs = Output::new(peripherals.GPIO7, Level::Low, OutputConfig::default().with_drive_mode(DriveMode::PushPull));
 
         dbg!(disp_dc.output_level());
 
@@ -152,19 +139,18 @@ impl Lilka {
         let miso = peripherals.GPIO8; //good
         let sck = peripherals.GPIO18; //good
 
-        let spi_config: Config = Config::default()
-            .with_frequency(Rate::from_mhz(60))
-            .with_mode(Mode::_0);
+        let spi_config: Config = Config::default().with_frequency(Rate::from_mhz(60)).with_mode(Mode::_0);
 
         let spi = Spi::new(peripherals.SPI2, spi_config)
             .unwrap()
             .with_sck(sck)
             .with_mosi(mosi)
-            .with_miso(miso);
+            .with_miso(miso)
+            .into_async();
 
-        let spi_bus = SPI_CELL.init(RefCell::new(spi));
+        let spi_bus = SPI_CELL.init(Mutex::new(RefCell::new(spi)));
         // let spi_device = match RefCellDevice::new_no_delay(spi_bus, disp_cs) {
-        let spi_device = match RefCellDevice::new(spi_bus, disp_cs, delay) {
+        let spi_device = match CriticalSectionDevice::new(spi_bus, disp_cs, delay) {
             Ok(spi_device) => {
                 println!("\x1b[42m[OK]\x1b[0m SPI device init");
                 spi_device
@@ -203,22 +189,25 @@ impl Lilka {
             }
         };
 
-        dbg!(display.is_sleeping());
-
         display.set_tearing_effect(TearingEffect::Off).unwrap();
 
         // Make the display all black
         display.clear(Rgb565::BLACK).unwrap();
 
-        //===Buzzer initialization===
-        let buzzer = Output::new(
-            peripherals.GPIO11,
-            Level::Low,
-            OutputConfig::default().with_drive_mode(DriveMode::PushPull),
-        );
+        // let display = DISPLAY_CELL.init(Mutex::new(display));
 
+        let display_mutex = DISPLAY_MUTEX.init(EmbassyMutex::new(RefCell::new(DISPLAY_CELL.init(display))));
+        // DISPLAY_MUTEX.lock(|cell| {
+        //     cell.init(display);
+        //     cell.re
+        // });
+
+        //===Buzzer initialization===
+        let mut buzzer = Output::new(peripherals.GPIO11, Level::Low, OutputConfig::default().with_drive_mode(DriveMode::PushPull));
+
+        //===SD Card initialization===
         let sd_cs = Output::new(peripherals.GPIO16, Level::Low, OutputConfig::default());
-        let sd_spi = match RefCellDevice::new(spi_bus, sd_cs, delay) {
+        let sd_spi = match CriticalSectionDevice::new(spi_bus, sd_cs, delay) {
             Ok(spi_device) => {
                 println!("\x1b[42m[OK]\x1b[0m SD SPI device init");
                 spi_device
@@ -233,12 +222,29 @@ impl Lilka {
         println!("Card size is {} bytes", sdcard.num_bytes().unwrap());
         let mut sd_volume_manager = VolumeManager::new(sdcard, DummyTimesource::default());
 
+        //===Button Inputs initialization===
+        let input_state = InputState {
+            a: Input::new(peripherals.GPIO5, InputConfig::default().with_pull(Pull::Up)),
+            b: Input::new(peripherals.GPIO6, InputConfig::default().with_pull(Pull::Up)),
+            c: Input::new(peripherals.GPIO10, InputConfig::default().with_pull(Pull::Up)),
+            d: Input::new(peripherals.GPIO9, InputConfig::default().with_pull(Pull::Up)),
+
+            up: Input::new(peripherals.GPIO38, InputConfig::default().with_pull(Pull::Up)),
+            down: Input::new(peripherals.GPIO41, InputConfig::default().with_pull(Pull::Up)),
+            left: Input::new(peripherals.GPIO39, InputConfig::default().with_pull(Pull::Up)),
+            right: Input::new(peripherals.GPIO40, InputConfig::default().with_pull(Pull::Up)),
+
+            select: Input::new(peripherals.GPIO0, InputConfig::default().with_pull(Pull::Up)),
+            start: Input::new(peripherals.GPIO4, InputConfig::default().with_pull(Pull::Up)),
+        };
+
         Ok(Lilka {
             peripherals: unsafe { Peripherals::steal() },
             delay,
             buzzer: Buzzer(buzzer),
+            input_state,
             sd_volume_manager,
-            display,
+            display: display_mutex,
         })
     }
 }

@@ -241,6 +241,7 @@ dependencies = [
  "embedded-hal 1.0.0",
  "embedded-hal-async",
  "futures-util",
+ "log",
 ]
 
 [[package]]
@@ -702,6 +703,7 @@ dependencies = [
  "display-interface-spi",
  "embassy-embedded-hal",
  "embassy-executor",
+ "embassy-futures",
  "embassy-sync",
  "embassy-time",
  "embedded-graphics",
