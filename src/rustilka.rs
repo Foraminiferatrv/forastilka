@@ -62,7 +62,7 @@ pub struct Lilka {
     pub peripherals: Peripherals,
     pub delay: Delay,
     // pub display: &'static mut Mutex<LilkaDisplay>,
-    // pub display: LilkaDisplayMutex,
+    pub display: LilkaDisplay,
 
     //Other fields
     pub input_state: InputState,
@@ -81,8 +81,8 @@ static DISPLAY_BUFFER_CELL: StaticCell<[u8; 512]> = StaticCell::new();
 // static DISPLAY_MUTEX: Mutex<StaticCell<LilkaDisplay>> = Mutex::new(StaticCell::new());
 pub static DISPLAY_CELL: StaticCell<LilkaDisplay> = StaticCell::new();
 // pub static DISPLAY_MUTEX: EmbassyMutex<Critica   lSectionRawMutex, ConstStaticCell<Option<LilkaDisplay>>> = EmbassyMutex::new(ConstStaticCell::new(None)); //works
-pub static DISPLAY: ConstStaticCell<EmbassyMutex<CriticalSectionRawMutex, RefCell<Option<&mut LilkaDisplay>>>> =
-    ConstStaticCell::new(EmbassyMutex::new(RefCell::new(None)));
+// pub static DISPLAY: ConstStaticCell<EmbassyMutex<CriticalSectionRawMutex, RefCell<Option<&mut LilkaDisplay>>>> =
+//     ConstStaticCell::new(EmbassyMutex::new(RefCell::new(None)));
 static GPIO_CELL: StaticCell<Mutex<Peripherals>> = StaticCell::new();
 
 //==SD Card==
@@ -159,8 +159,8 @@ impl Lilka {
                 spi_device
             }
             Err(e) => {
-                println!("[ERROR] Display init failed: {:?}", e);
-                return Err("Display init failed");
+                println!("[ERROR] SPI device init failed: {:?}", e);
+                return Err("SPI device init failed");
             }
         };
 
@@ -203,11 +203,6 @@ impl Lilka {
         // DISPLAY_MUTEX.lock(|mu| {
         //     mu.
         // });
-        let mut cell = DISPLAY.take();
-
-        let disp_ref = DISPLAY_CELL.init(display);
-
-        cell.lock(|c| c.borrow_mut().replace(disp_ref));
 
         //===Buzzer initialization===f
         let mut buzzer = Output::new(peripherals.GPIO11, Level::Low, OutputConfig::default().with_drive_mode(DriveMode::PushPull));
@@ -251,7 +246,7 @@ impl Lilka {
             buzzer: Buzzer(buzzer),
             input_state,
             sd_volume_manager,
-            // display: display_mutex,
+            display,
         })
     }
 }

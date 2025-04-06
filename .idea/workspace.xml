@@ -8,8 +8,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ebfdb348-cdee-4c63-b24c-9cd833b95fd8" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.cargo/config.toml" beforeDir="false" afterPath="$PROJECT_DIR$/.cargo/config.toml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/rustilka.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/rustilka.rs" afterDir="false" />
@@ -134,6 +134,10 @@
       <workItem from="1742319364931" duration="6725000" />
       <workItem from="1743171329749" duration="1979000" />
       <workItem from="1743421996908" duration="17256000" />
+      <workItem from="1743450758424" duration="4837000" />
+      <workItem from="1743492902472" duration="1650000" />
+      <workItem from="1743524868561" duration="1820000" />
+      <workItem from="1743687642547" duration="8780000" />
     </task>
     <servers />
   </component>
