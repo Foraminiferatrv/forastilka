@@ -44,7 +44,7 @@ mod cfg;
 mod modules;
 mod rustilka;
 
-use crate::rustilka::{EXECUTOR, InputState, LilkaDisplay, LilkaDisplayMutex};
+use crate::rustilka::{EXECUTOR, InputState, LilkaDisplay};
 use cfg::Configuration;
 use rustilka::Lilka;
 
@@ -81,7 +81,57 @@ fn reset_screen_text() {
         text_box.draw(disp.as_deref_mut().unwrap()).unwrap();
     });
 }
-fn draw_text(text: &str, display: &mut LilkaDisplay) {
+// fn draw_text(text: &str, display: &mut LilkaDisplay) {
+//     let char_style = MonoTextStyle::new(&FONT_9X18_BOLD, Rgb565::WHITE);
+//     let textbox_style = TextBoxStyleBuilder::new()
+//         .height_mode(HeightMode::FitToText)
+//         .alignment(HorizontalAlignment::Justified)
+//         .vertical_alignment(VerticalAlignment::Bottom)
+//         .build();
+//     let bounds = Rectangle::new(Point::new(10, 20), Size::new(280, 0));
+//     let text_box = TextBox::with_textbox_style(text, bounds, char_style, textbox_style);
+//
+//     display.clear(Rgb565::BLACK).ok();
+//
+//     text_box.draw(display).unwrap();
+// }
+
+async fn draw_text_with_timeout(text: &str, display: &mut LilkaDisplay) {
+    draw_text(text, display);
+    Timer::after(Duration::from_millis(1000)).await;
+    reset_screen_text();
+}
+// #[embassy_executor::task]
+// async fn test_input(mut input_state: InputState, display: &'static mut LilkaDisplay) {
+//     println!("test_input");
+//
+//     join_array([
+//         button(input_state.a, "A", display),
+//         button(input_state.b, "B", display),
+//         button(input_state.c, "C", display),
+//         button(input_state.d, "D", display),
+//         button(input_state.select, "Select", display),
+//         button(input_state.start, "Start", display),
+//         button(input_state.up, "Up", display),
+//         button(input_state.down, "Down", display),
+//         button(input_state.left, "Left", display),
+//         button(input_state.right, "Right", display),
+//     ]).await;
+//
+//     println!("END TASK");
+// }
+
+async fn button(mut input: Input<'_>, name: &str, display: &mut LilkaDisplay) {
+    loop {
+        input.wait_for_low().await;
+        println!("Button pressed: {}", name);
+        draw_text(name, display).await;
+        Timer::after_millis(200).await;
+        input.wait_for_high().await;
+    }
+}
+
+async fn draw_text(text: &str, display: &mut LilkaDisplay) {
     let char_style = MonoTextStyle::new(&FONT_9X18_BOLD, Rgb565::WHITE);
     let textbox_style = TextBoxStyleBuilder::new()
         .height_mode(HeightMode::FitToText)
@@ -95,39 +145,13 @@ fn draw_text(text: &str, display: &mut LilkaDisplay) {
 
     text_box.draw(display).unwrap();
 }
-
-async fn draw_text_with_timeout(text: &str, display: &mut LilkaDisplay) {
-    draw_text(text, display);
-    Timer::after(Duration::from_millis(1000)).await;
-    reset_screen_text();
-}
 #[embassy_executor::task]
-async fn test_input(mut input_state: InputState, display: &'static mut LilkaDisplay) {
-    println!("test_input");
-
-    join_array([
-        button(input_state.a, "A"),
-        button(input_state.b, "B"),
-        button(input_state.c, "C"),
-        button(input_state.d, "D"),
-        button(input_state.select, "Select"),
-        button(input_state.start, "Start"),
-        button(input_state.up, "Up"),
-        button(input_state.down, "Down"),
-        button(input_state.left, "Left"),
-        button(input_state.right, "Right"),
-    ])
-    .await;
-
-    println!("END TASK");
-}
-
-async fn button(mut input: Input<'_>, name: &str) {
+async fn render(display: &'static mut LilkaDisplay) {
     loop {
-        input.wait_for_low().await;
-        println!("Button pressed: {}", name);
-        Timer::after_millis(200).await;
-        input.wait_for_high().await;
+        draw_text("Hello World!", display).await;
+        Timer::after_millis(1000).await;
+        draw_text("Hello World 2!", display).await;
+        Timer::after_millis(1000).await;
     }
 }
 
@@ -135,7 +159,6 @@ static DISPLAY_CELL: StaticCell<LilkaDisplay> = StaticCell::new();
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     let mut lilka = Lilka::new(Configuration::default()).await.unwrap();
-
     let display = DISPLAY_CELL.init(lilka.display);
 
     let input_state = lilka.input_state;
@@ -147,7 +170,6 @@ async fn main(spawner: Spawner) {
     let timg0 = TimerGroup::new(lilka.peripherals.TIMG0);
     esp_hal_embassy::init(timg0.timer0);
 
-    let greeting_text = "Hello World...";
-
-    spawner.spawn(test_input(input_state, display)).unwrap();
+    // spawner.spawn(test_input(input_state, display)).unwrap();
+    spawner.spawn(render(display)).unwrap();
 }
